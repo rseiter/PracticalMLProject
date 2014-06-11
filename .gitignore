@@ -6,3 +6,16 @@
 
 # R data files from past sessions
 .Rdata
+.Rproj.user
+
+# Downloaded data files
+data
+
+# Answer files
+answers
+
+# Archive files (here correct answers)
+.tgz
+
+# Useful papers, but don't include in repository
+papers
