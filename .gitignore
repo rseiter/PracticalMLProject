@@ -8,14 +8,16 @@
 .Rdata
 .Rproj.user
 
+# knitr cache files
+*_cache
+*_files
+
 # Downloaded data files
 data
 
 # Answer files
 answers
-
-# Archive files (here correct answers)
-.tgz
+correct_answers.tgz
 
 # Useful papers, but don't include in repository
 papers

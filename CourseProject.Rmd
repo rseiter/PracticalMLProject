@@ -8,11 +8,13 @@ output: html_document
 Synopsis
 ========
 
-```{r init, cache=FALSE}
+The goal of this project is to use the supplied datasets (accelerometer data tagged with one of five classes of performance, see Data below) to predict the performance class of 20 new observations.  This report outlines an approach using feature selection with cfsSubsetEval in Weka and a cross validated random forest model which achieves over 99% cross validation accuracy and 20/20 correct on the test data.
+
+```{r init, cache=FALSE, message=F, warning=F}
 # Enable caching
-# require(knitr)
-# opts_chunk$set(cache=TRUE, autodep=TRUE)
-# dep_auto() # figure out dependencies automatically
+require(knitr)
+opts_chunk$set(cache=TRUE, autodep=TRUE)
+dep_auto() # figure out dependencies automatically
 
 library(caret)
 ```
@@ -47,16 +49,11 @@ summary(train$classe)
 Data Processing
 ===============
 
-Note issues with #DIV/0! in computed fields
-6 users in train and same 6 in test
+Rather than using the caret functions nearZeroVar, findCorrelation, and findLinearCombos (or similar techniques) in this section (included for informational purposes) data processing was skipped in favor of doing feature selection in Weka using [CfsSubsetEval](http://wiki.pentaho.com/display/DATAMINING/CfsSubsetEval) starting with the user_name attribute after removing attributes which were "too informative" (like the row number X, timestamps, and numwindow).  This is similar to the technique used by the paper authors referenced as [M. A. Hall. Correlation-based Feature Subset Selection for Machine Learning](http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.37.4643) except they used 17 features rather than 11.  See wekaVars and indVars assignments below for the variables chosen.
 
-Note problem_id field in test
+Doing feature selection in this fashion avoided a number of issues with the data.  For example, note issues with #DIV/0! in computed fields resulting in numeric values being treated as factors and many attributes containing excessive NAs.
 
-They selected 17 features using M. A. Hall. Correlation-based Feature Subset Selection
-for Machine Learning.  Try using this in Weka?
-
-X is a row number.  Remove.
-remove timestamps, numwindow
+After the initial implementation I became aware of the [FSelector](http://cran.r-project.org/web/packages/FSelector/FSelector.pdf) R package which supports a similar capability (but is less flexible, for example it is not possible to specify a starting set) and is used below as an example of how to do this type of feature selection in R (another alternative would be RWeka).
 
 ```{r dataProc}
 # Check for and remove near zero variance variables
@@ -75,7 +72,35 @@ highlyCor
 
 # combos <- findLinearCombos(train[sapply(train, is.numeric)])
 # combos
+
+# Variable selection using CFS subset
+library(FSelector)
+useVars <- setdiff(colnames(train), c("X", "raw_timestamp_part_1",
+                                      "raw_timestamp_part_2", "cvtd_timestamp",
+                                      "num_window"))
+cfsVars <- cfs(classe ~ ., train[, useVars])
+
+# Weka CfsSubsetEval came up with this list after removing a few, merit 0.234
+# 1,3,4,5,40,55,61,109,114,115,118 : 11
+wekaVars <- indVars <- c("user_name", "roll_belt", "pitch_belt", "yaw_belt",
+                         "magnet_belt_z", "gyros_arm_x", "magnet_arm_x",
+                         "gyros_dumbbell_y", "magnet_dumbbell_x", "magnet_dumbbell_y",
+                         "pitch_forearm")
+# Using 10-fold CV for CfsSubsetEval consistently gave the same list minus magnet_dumbbell_x
+
+cfsVars
+wekaVars
+intersect(wekaVars, cfsVars)
+# setdiff(cfsVars, wekaVars)
+# setdiff(wekaVars, cfsVars)
+
+indVars <- wekaVars
+# indVars <- cfsVars # Try this for comparison
 ```
+
+The variable lists returned by FSelector and Weka are surprisingly different given they use a similar algorithm.  Given that the Weka implementation was done by M. A. Hall (who wrote the original paper describing the technique) and is more flexible I tend to prefer it.
+
+It turned out FSelector::cfs chose a poor set of variables.  Most of them were almost completely NA!  Therefore I will continue to use the Weka CfsSubsetEval selected variables.
 
 ```{r startParallel, cache=FALSE, echo=FALSE, message=F, warning=F}
 # Enable parallelism by setting maxCores > 1
@@ -99,20 +124,26 @@ if (usingParallel) {
 }
 ```
 
+
 Results
 =======
 
-The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases. 
+The goal of this project is to predict the manner in which the test subjects did the exercise. This is the "classe" variable in the training set (depVar below).  I chose a random forest model to begin because they usually give high accuracy although there can be runtime (using parallel processing in caret helps with this) and interpretability costs.  The feature selection approach is described above and was chosen based on its use by the authors and my desire to use a technique I recently learned in [More Data Mining with Weka](https://weka.waikato.ac.nz/moredataminingwithweka/course) in a practical setting.
 
-Having problems with "Error ... final tuning parameters could not be determined"  See
-http://stackoverflow.com/questions/19122617/enet-works-but-not-when-run-via-carettrain  
+10-fold cross validation was chosen as a good starting model validation technique.  Even though we have enough data to make a train/test split possible, I like the averaging effect of cross validation and have had good experience using it in caret.
+
+For out of sample error I would expect something similar to the observed 99% accuracy for the same subjects (user_name) and 20/20 on the submission lends support to that belief.  But, I would expect worse results for different subjects.  The paper authors did leave one subject out cross validation giving an accuracy of 78% (which seems like a reasonable estimate for new subjects), but I did not feel it was necessary to replicate that technique for this project.
+
+The initial intent was for this to be a baseline model, but given the performance I see no need to change it.
 
 ```{r results1}
-# First try a simple random forest in caret
+# First try a simple random forest using caret
 library(caret)
+
 # Note multiclass classification adds some issues
 trainMetric = "Accuracy" # Classification default, a poor metric if uneven split
 trainSummary <- defaultSummary
+
 fitControl <-
   trainControl(
                #method = "none", # For initial testing, requires 1 model (tuneLength or grid)
@@ -125,31 +156,27 @@ fitControl <-
                selectionFunction = "best", # default, see ?best
                allowParallel = usingParallel
                )
-rfGrid <- expand.grid(.mtry = c(5, 10))
-gbmGrid <- expand.grid(.interaction.depth = c(4),
-                       .n.trees = c(1:10) * 500,
-                       .shrinkage = c(.01))
-#rfGrid <- gbmGrid
-depVar <- "classe"
-indVars <- setdiff(colnames(train), depVar)
-# Just pick a subset for now.  Use dput(indVars) to create.
-# Weka CfsSubsetEval came up with this list after removing a few, merit 0.234?
-# 1,3,4,5,40,55,61,109,114,115,118 : 11
-indVars <- c("user_name", "roll_belt", "pitch_belt", "yaw_belt", "magnet_belt_z", "gyros_arm_x", "magnet_arm_x", "gyros_dumbbell_y", "magnet_dumbbell_x", "magnet_dumbbell_y", "pitch_forearm")
-# Using 10-fold CV consistently gave the same list minus magnet_dumbbell_x
 
+rfGrid <- expand.grid(.mtry = c(5, 10))
+
+depVar <- "classe"
+# indVars set in Data Processing above
+
+set.seed(123)
 rfFit <- train(train[,indVars],
                train[,depVar],
-               method = "rf", # error, try GBM as a hack
-               #method = "gbm",
+               method = "rf",
                metric = trainMetric,
                tuneGrid = rfGrid,
-               #tuneLength = 1, # Run once for now  # With parallel turn on optimization
+               #tuneLength = 1, # Run once for debugging
                trControl = fitControl,
                # Following arguments for rf
                #ntrees = 301, # Try combatting overfitting
                importance=TRUE
                )
+
+# Run time
+rfFit$times$everything
 
 rfFit
 
@@ -159,18 +186,27 @@ rfImp
 plot(rfFit)
 
 # Look at performance
-# getTrainPerf(rfFit) # See above
 confusionMatrix(rfFit)
 ```
 
+The CV training accuracy is superb at 99%.
+
+The paper authors presented a confusion matrix for the leave one subject out test with overall accuracy 78.2%.  Their overall accuracy (of all data) given was 98.2%.
+
+Now generate predictions on the test set.
+
 ```{r predict}
+correctAnswers <- structure(c(2L, 1L, 2L, 1L, 1L, 5L, 4L, 2L, 1L, 1L, 2L, 3L, 2L, 
+                              1L, 5L, 5L, 1L, 2L, 2L, 2L),
+                            .Label = c("A", "B", "C", "D", "E" ),
+                            class = "factor")
 rfPred <- predict(rfFit, newdata=test[,indVars])
 
 # Convert the answers to strings and print
 answers = as.character(rfPred)
 rbind(test$X, answers)
 
-# Write the answers to individual files
+# Write the answers to individual files for submission
 pml_write_files = function(x){
   n = length(x)
   for(i in 1:n){
@@ -181,12 +217,7 @@ pml_write_files = function(x){
 pml_write_files(answers)
 ```
 
-
-Supporting Analysis
-===================
-
-```{r analysis}
-```
+`r sum(correctAnswers == rfPred)` out of 20 answers correct.
 
 ```{r finishParallel, echo=FALSE, cache=FALSE}
 # Close clusters after model training complete
@@ -197,10 +228,3 @@ if (usingParallel) {
   registerDoSEQ()
 }
 ```
-
-Paper Notes
-===========
-
-Feature selection discussed on page 3 section 5.1.  
-They used random forest (page 4 section 5.2).  10 forests of 10 trees seems like an odd choice.  
-Confusion matrix is for the leave one subject out test with overall accuracy 78.2%.  Overall accuracy (of all data, what we should see?) was 98.2%.  
