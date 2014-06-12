@@ -82,10 +82,10 @@ cfsVars <- cfs(classe ~ ., train[, useVars])
 
 # Weka CfsSubsetEval came up with this list after removing a few, merit 0.234
 # 1,3,4,5,40,55,61,109,114,115,118 : 11
-wekaVars <- indVars <- c("user_name", "roll_belt", "pitch_belt", "yaw_belt",
-                         "magnet_belt_z", "gyros_arm_x", "magnet_arm_x",
-                         "gyros_dumbbell_y", "magnet_dumbbell_x", "magnet_dumbbell_y",
-                         "pitch_forearm")
+wekaVars <- c("user_name", "roll_belt", "pitch_belt", "yaw_belt",
+              "magnet_belt_z", "gyros_arm_x", "magnet_arm_x",
+              "gyros_dumbbell_y", "magnet_dumbbell_x", "magnet_dumbbell_y",
+              "pitch_forearm")
 # Using 10-fold CV for CfsSubsetEval consistently gave the same list minus magnet_dumbbell_x
 
 cfsVars
@@ -218,6 +218,242 @@ pml_write_files(answers)
 ```
 
 `r sum(correctAnswers == rfPred)` out of 20 answers correct.
+
+This is the end of the official submission.  Below this is some supplemental analysis which I thought might be of interest, but should not be included in the grading.
+
+
+Supplemental Analysis
+=====================
+
+Decision Tree
+-------------
+
+Although accurate, the random forest model above is not very interpretable.  Try a decision tree model here to see if we learn anything more about the data.
+
+```{r tree}
+# Since this is a good example of multi class classification try out multiClassSummary
+# Use modified multiClassSummary to get as much performance info as possible
+source("multiClassSummary.R")
+#trainSummary <- multiClassSummary
+fitControlMulti <-
+  trainControl(method = "cv",
+               number = 10, # 10 is default
+               repeats = 1,
+               verboseIter = TRUE, # Debug, seems to be proving helpful
+               classProbs = TRUE, # Needed for twoClassSummary
+               #summaryFunction = multiClassSummary,
+               summaryFunction = trainSummary,
+               selectionFunction = "best", # default, see ?best
+               allowParallel = usingParallel
+               )
+
+rpartGrid <- expand.grid(.cp = c(0.02, 0.05))
+
+set.seed(123)
+rpartFit <- train(train[,indVars],
+               train[,depVar],
+               method = "rpart",
+               metric = trainMetric,
+               tuneGrid = rpartGrid,
+               #tuneLength = 1, # Run once for debugging
+               trControl = fitControl
+               # Following arguments for rpart
+               )
+
+# Run time
+rpartFit$times$everything
+
+rpartFit
+
+plot(rpartFit)
+
+# Look at performance
+confusionMatrix(rpartFit)
+
+# Look at the tree itself
+library(rattle)
+png("CourseProjectTree.png", width=1500, height=800)
+fancyRpartPlot(rpartFit$finalModel)
+dev.off()
+```
+
+The accuracy is clearly inferior to random forest, but for small cp is not that bad.
+
+The tree was too large to display inline, but the PNG is available in the repository.
+
+
+Leave One Subject Out Cross Validation
+--------------------------------------
+
+Mentioned above as being outside of the scope of this project I thought this would be a useful technique to know how to use in the future so decided to try to implement it here.
+
+Henceforth called LOSOCV. (aka LOSOXV)
+
+Most straightforward way to do this appears to be using the index argument to trainControl: http://stats.stackexchange.com/questions/93227/how-to-implement-a-hold-out-validation-in-r  
+
+Did not succeed with this.  Initial work left below in case I want to revisit (code not echoed).
+
+Is this LGOCV in caret?  (see caretTrain.pdf vignette)    
+http://stats.stackexchange.com/questions/68472/lgocv-caret-package-r  
+It does not look like this is it.
+
+Just use index?  
+http://stats.stackexchange.com/questions/93227/how-to-implement-a-hold-out-validation-in-r
+
+Some discussion of [leave-one-subject-out cross-validation](http://stats.stackexchange.com/questions/62823/correct-setup-for-leave-one-subject-out-cross-validation?rq=1)  
+[A survey of cross-validation procedures for model selection](http://arxiv.org/abs/0907.4728)  
+[LOSOCV at Kaggle](http://www.kaggle.com/c/decoding-the-human-brain/forums/t/8107/clarification-please-public-and-private-split-on-the-leaderboard/44332)
+
+```{r createSubjectFolds, echo=FALSE, eval=FALSE}
+# Version of caret::CreateFolds which supports LOSOCV
+# Requires
+
+y <- train[,depVar]
+subject <- train[,"user_name"]
+
+# Compare to basic createFolds
+folds <- createFolds(y)
+
+createSubjectFolds <-
+  function (y, subject, list = TRUE, returnTrain = FALSE) 
+{
+    k <- length(levels(subject))
+    if (is.numeric(y)) {
+        cuts <- floor(length(y)/k)
+        if (cuts < 2) 
+            cuts <- 2
+        if (cuts > 5) 
+            cuts <- 5
+        y <- cut(y, unique(quantile(y, probs = seq(0, 1, length = cuts))), 
+            include.lowest = TRUE)
+    }
+    if (k < length(y)) {
+        y <- factor(as.character(y))
+        numInClass <- table(y)
+        foldVector <- vector(mode = "integer", length(y))
+        for (i in 1:length(numInClass)) {
+            seqVector <- rep(1:k, numInClass[i]%/%k)
+            if (numInClass[i]%%k > 0) 
+                seqVector <- c(seqVector, sample(1:k, numInClass[i]%%k))
+            foldVector[which(y == dimnames(numInClass)$y[i])] <- sample(seqVector)
+        }
+    }
+    else foldVector <- seq(along = y)
+    if (list) {
+        out <- split(seq(along = y), foldVector)
+        names(out) <- paste("Fold", gsub(" ", "0", format(seq(along = out))), 
+            sep = "")
+        if (returnTrain) 
+            out <- lapply(out, function(data, y) y[-data], y = seq(along = y))
+    }
+    else out <- foldVector
+    out
+}
+```
+
+```{r LOSOCV, echo=T, eval=T}
+subject <- train[,"user_name"]
+subjectFolds <- length(levels(subject))
+
+subjectIndexes <- list()
+for (i in 1:length(levels(subject))){ 
+  subjectIndexes[[paste0("Fold",i)]] = which(subject == levels(subject)[i])
+}
+
+str(subjectIndexes)
+#summary(subjectIndexes)
+#lapply(subjectIndexes, summary)
+
+# Compare to basic createFolds
+folds <- createFolds(train[,depVar], k=subjectFolds)
+# subjectIndexes <- folds # This works fine
+
+fitControlLOSOCV <-
+  trainControl(method = "cv",
+               number = subjectFolds,
+               repeats = 1,
+               verboseIter = TRUE, # Debug, seems to be proving helpful
+               classProbs = TRUE, # Needed for twoClassSummary
+               summaryFunction = trainSummary,
+               selectionFunction = "best", # default, see ?best
+               index = subjectIndexes,
+               allowParallel = usingParallel
+               )
+
+rfGridLOSOCV <- expand.grid(.mtry = c(5))
+
+set.seed(123)
+rfFitLOSOCV <- train(train[,indVars],
+                     train[,depVar],
+                     method = "rf",
+                     metric = trainMetric,
+                     tuneGrid = rfGridLOSOCV,
+                     #tuneLength = 1, # Run once for debugging
+                     trControl = fitControlLOSOCV,
+                     # Following arguments for rf
+                     #ntrees = 301, # Try combatting overfitting
+                     importance=TRUE
+                     )
+
+# Run time
+rfFitLOSOCV$times$everything
+
+rfFitLOSOCV
+
+rfImpLOSOCV <- varImp(rfFitLOSOCV)
+rfImpLOSOCV
+
+# Look at performance
+confusionMatrix(rfFitLOSOCV)
+```
+
+It turns out this model is virtually useless for predicting subjects not included in the training set!
+
+Try using a different set of variables (not including user_name) from cfsSubsetEval in Weka.
+
+```{r LOSOCV1, echo=T, eval=T}
+# Weka CfsSubsetEval came up with this list after removing a few, merit 0.266
+# 3,4,5,61,109,115,118 : 7
+# This is a subset of the original set so just try removing user_name from the original
+wekaVars1 <- c("roll_belt", "pitch_belt", "yaw_belt",
+               "magnet_belt_z", "gyros_arm_x", "magnet_arm_x",
+               "gyros_dumbbell_y", "magnet_dumbbell_x", "magnet_dumbbell_y",
+               "pitch_forearm")
+# Using 10-fold CV for CfsSubsetEval gave similar results
+
+set.seed(123)
+rfFitLOSOCV1 <- train(train[,wekaVars1],
+                      train[,depVar],
+                      method = "rf",
+                      metric = trainMetric,
+                      tuneGrid = rfGridLOSOCV,
+                      #tuneLength = 1, # Run once for debugging
+                      trControl = fitControlLOSOCV,
+                      # Following arguments for rf
+                      #ntrees = 301, # Try combatting overfitting
+                      importance=TRUE
+                      )
+
+# Run time
+rfFitLOSOCV1$times$everything
+
+rfFitLOSOCV1
+
+rfImpLOSOCV1 <- varImp(rfFitLOSOCV1)
+rfImpLOSOCV1
+
+# Look at CV performance
+confusionMatrix(rfFitLOSOCV1)
+
+# Look at performance of the final model.  This will overfit since it uses the entire
+# training set to fit the model.
+predLOSOCV1 <- predict(rfFitLOSOCV1)#, train[,wekaVars1])
+confusionMatrix(train$classe, predLOSOCV1)
+```
+
+This model is still virtually useless for predicting subjects outside of the training set!  Note the difference between the CV accuracy (usually a good estimate for out of sample) and the accuracy on the entire training set (grossly overfit).
+
+I am impressed by the 78.2% LOSOCV accuracy quoted in the paper.  Working to replicate that would be worthwhile, but I have already exceeded my time budget for this project.
 
 ```{r finishParallel, echo=FALSE, cache=FALSE}
 # Close clusters after model training complete
