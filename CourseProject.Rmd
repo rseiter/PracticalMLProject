@@ -24,7 +24,7 @@ Data
 
 The data for this report come in the form of CSV training and testing files originally from http://groupware.les.inf.puc-rio.br/har and downloaded on `r readChar("./data/dateDownloaded.txt", 1e5)`.  See download_data.R for details.
 
-The class variable represents performing a Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).  Note that this is unordered.
+The class variable represents performing a Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).  Note that these classes are unordered.
 
 Read more: http://groupware.les.inf.puc-rio.br/har#ixzz34LM1QlJ3  
 From the paper [Qualitative Activity Recognition of Weight Lifting Exercises](http://groupware.les.inf.puc-rio.br/work.jsf?p1=11201)
@@ -132,7 +132,7 @@ The goal of this project is to predict the manner in which the test subjects did
 
 10-fold cross validation was chosen as a good starting model validation technique.  Even though we have enough data to make a train/test split possible, I like the averaging effect of cross validation and have had good experience using it in caret.
 
-For out of sample error I would expect something similar to the observed 99% accuracy for the same subjects (user_name) and 20/20 on the submission lends support to that belief.  But, I would expect worse results for different subjects.  The paper authors did leave one subject out cross validation giving an accuracy of 78% (which seems like a reasonable estimate for new subjects), but I did not feel it was necessary to replicate that technique for this project.
+For out of sample error I would expect something similar to the observed 99% accuracy for the same subjects (user_name) and 20/20 on the submission lends support to that belief.  But, I would expect worse results for different subjects.  The paper authors did leave one subject out cross validation giving an accuracy of 78% (which seems like a reasonable estimate for new subjects), but I did not feel it was necessary to replicate that technique for this project (but I did, see supplemental analysis where accuracy was only 22%!).
 
 The initial intent was for this to be a baseline model, but given the performance I see no need to change it.
 
@@ -222,7 +222,7 @@ pml_write_files(answers)
 This is the end of the official submission.  Below this is some supplemental analysis which I thought might be of interest, but should not be included in the grading.
 
 
-Supplemental Analysis
+Supplemental Analysis (not to be graded)
 =====================
 
 Decision Tree
@@ -230,19 +230,21 @@ Decision Tree
 
 Although accurate, the random forest model above is not very interpretable.  Try a decision tree model here to see if we learn anything more about the data.
 
+multiClassSummary code not working properly.
+
 ```{r tree}
 # Since this is a good example of multi class classification try out multiClassSummary
 # Use modified multiClassSummary to get as much performance info as possible
 source("multiClassSummary.R")
-#trainSummary <- multiClassSummary
+
 fitControlMulti <-
   trainControl(method = "cv",
                number = 10, # 10 is default
                repeats = 1,
                verboseIter = TRUE, # Debug, seems to be proving helpful
                classProbs = TRUE, # Needed for twoClassSummary
-               #summaryFunction = multiClassSummary,
-               summaryFunction = trainSummary,
+               summaryFunction = multiClassSummary, # Not working as expected?
+               #summaryFunction = trainSummary,
                selectionFunction = "best", # default, see ?best
                allowParallel = usingParallel
                )
@@ -251,14 +253,14 @@ rpartGrid <- expand.grid(.cp = c(0.02, 0.05))
 
 set.seed(123)
 rpartFit <- train(train[,indVars],
-               train[,depVar],
-               method = "rpart",
-               metric = trainMetric,
-               tuneGrid = rpartGrid,
-               #tuneLength = 1, # Run once for debugging
-               trControl = fitControl
-               # Following arguments for rpart
-               )
+                  train[,depVar],
+                  method = "rpart",
+                  metric = trainMetric,
+                  tuneGrid = rpartGrid,
+                  #tuneLength = 1, # Run once for debugging
+                  trControl = fitControl
+                  # Following arguments for rpart
+                  )
 
 # Run time
 rpartFit$times$everything
@@ -268,7 +270,19 @@ rpartFit
 plot(rpartFit)
 
 # Look at performance
+getTrainPerf(rpartFit)
 confusionMatrix(rpartFit)
+
+# multi class performance code not working as I would like
+library(plyr)
+allProb <- extractProb(list(rpartFit),
+                       testX = train[, indVars],
+                       testY = train[, depVar])
+trainProb <- subset(allProb, dataType == "Test")
+str(trainProb)
+summary3 <- ddply(trainProb, .(model),
+                  function(x) multiClassSummary(x, lev=train[, depVar]))
+print(summary3)
 
 # Look at the tree itself
 library(rattle)
@@ -290,66 +304,13 @@ Mentioned above as being outside of the scope of this project I thought this wou
 Henceforth called LOSOCV. (aka LOSOXV)
 
 Most straightforward way to do this appears to be using the index argument to trainControl: http://stats.stackexchange.com/questions/93227/how-to-implement-a-hold-out-validation-in-r  
+It is unclear to me if/how LGOCV method in trainControl relates to this.
 
 Did not succeed with this.  Initial work left below in case I want to revisit (code not echoed).
-
-Is this LGOCV in caret?  (see caretTrain.pdf vignette)    
-http://stats.stackexchange.com/questions/68472/lgocv-caret-package-r  
-It does not look like this is it.
-
-Just use index?  
-http://stats.stackexchange.com/questions/93227/how-to-implement-a-hold-out-validation-in-r
 
 Some discussion of [leave-one-subject-out cross-validation](http://stats.stackexchange.com/questions/62823/correct-setup-for-leave-one-subject-out-cross-validation?rq=1)  
 [A survey of cross-validation procedures for model selection](http://arxiv.org/abs/0907.4728)  
 [LOSOCV at Kaggle](http://www.kaggle.com/c/decoding-the-human-brain/forums/t/8107/clarification-please-public-and-private-split-on-the-leaderboard/44332)
-
-```{r createSubjectFolds, echo=FALSE, eval=FALSE}
-# Version of caret::CreateFolds which supports LOSOCV
-# Requires
-
-y <- train[,depVar]
-subject <- train[,"user_name"]
-
-# Compare to basic createFolds
-folds <- createFolds(y)
-
-createSubjectFolds <-
-  function (y, subject, list = TRUE, returnTrain = FALSE) 
-{
-    k <- length(levels(subject))
-    if (is.numeric(y)) {
-        cuts <- floor(length(y)/k)
-        if (cuts < 2) 
-            cuts <- 2
-        if (cuts > 5) 
-            cuts <- 5
-        y <- cut(y, unique(quantile(y, probs = seq(0, 1, length = cuts))), 
-            include.lowest = TRUE)
-    }
-    if (k < length(y)) {
-        y <- factor(as.character(y))
-        numInClass <- table(y)
-        foldVector <- vector(mode = "integer", length(y))
-        for (i in 1:length(numInClass)) {
-            seqVector <- rep(1:k, numInClass[i]%/%k)
-            if (numInClass[i]%%k > 0) 
-                seqVector <- c(seqVector, sample(1:k, numInClass[i]%%k))
-            foldVector[which(y == dimnames(numInClass)$y[i])] <- sample(seqVector)
-        }
-    }
-    else foldVector <- seq(along = y)
-    if (list) {
-        out <- split(seq(along = y), foldVector)
-        names(out) <- paste("Fold", gsub(" ", "0", format(seq(along = out))), 
-            sep = "")
-        if (returnTrain) 
-            out <- lapply(out, function(data, y) y[-data], y = seq(along = y))
-    }
-    else out <- foldVector
-    out
-}
-```
 
 ```{r LOSOCV, echo=T, eval=T}
 subject <- train[,"user_name"]
@@ -404,6 +365,7 @@ rfImpLOSOCV <- varImp(rfFitLOSOCV)
 rfImpLOSOCV
 
 # Look at performance
+getTrainPerf(rfFitLOSOCV)
 confusionMatrix(rfFitLOSOCV)
 ```
 
@@ -443,6 +405,7 @@ rfImpLOSOCV1 <- varImp(rfFitLOSOCV1)
 rfImpLOSOCV1
 
 # Look at CV performance
+getTrainPerf(rfFitLOSOCV1)
 confusionMatrix(rfFitLOSOCV1)
 
 # Look at performance of the final model.  This will overfit since it uses the entire
