@@ -8,7 +8,7 @@ From the paper [Qualitative Activity Recognition of Weight Lifting Exercises](ht
 
 Links for submission:  
 https://github.com/rseiter/PracticalMLProject  
-http://rseiter.github.io/
+http://rseiter.github.io/PracticalMLProject/CourseProject.html
 
 [Writeup Submission Page](https://class.coursera.org/predmachlearn-002/human_grading/view/courses/972090/assessments/4/submissions)  
 [Prediction Submission Page](https://class.coursera.org/predmachlearn-002/assignment)
