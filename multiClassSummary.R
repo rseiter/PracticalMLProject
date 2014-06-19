@@ -38,7 +38,8 @@ multiClassSummary <- function (data, lev = NULL, model = NULL){
   #Aggregate and average class-wise stats
   #Todo: add weights
   # RES: support two classes here as well
-  if (length(levels(data[, "pred"]) == 2)) {
+  #browser() # Debug
+  if (length(levels(data[, "pred"])) == 2) {
     class_stats <- c(CM$byClass, prob_stats[1,])
   } else {
     class_stats <- cbind(CM$byClass, prob_stats)

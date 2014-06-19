@@ -46,12 +46,6 @@
 
 <h1 id="synopsis">Synopsis</h1>
 <p>The goal of this project is to use the supplied datasets (accelerometer data tagged with one of five classes of performance, see Data below) to predict the performance class of 20 new observations. This report outlines an approach using feature selection with cfsSubsetEval in Weka and a cross validated random forest model which achieves over 99% cross validation accuracy and 20/20 correct on the test data.</p>
-<pre class="r"><code># Enable caching
-require(knitr)
-opts_chunk$set(cache=TRUE, autodep=TRUE)
-dep_auto() # figure out dependencies automatically
-
-library(caret)</code></pre>
 <h1 id="data">Data</h1>
 <p>The data for this report come in the form of CSV training and testing files originally from <a href="http://groupware.les.inf.puc-rio.br/har">http://groupware.les.inf.puc-rio.br/har</a> and downloaded on Wed Jun 11 07:27:28 2014. See download_data.R for details.</p>
 <p>The class variable represents performing a Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Note that these classes are unordered.</p>
@@ -131,25 +125,30 @@ cfsVars</code></pre>
 <pre class="r"><code># setdiff(cfsVars, wekaVars)
 # setdiff(wekaVars, cfsVars)
 
+# Set dependent and independent variables we will use below
+depVar &lt;- &quot;classe&quot;
 indVars &lt;- wekaVars
-# indVars &lt;- cfsVars # Try this for comparison</code></pre>
+# indVars &lt;- cfsVars # Try this for comparison (results were unsatisfactory)</code></pre>
 <p>The variable lists returned by FSelector and Weka are surprisingly different given they use a similar algorithm. Given that the Weka implementation was done by M. A. Hall (who wrote the original paper describing the technique) and is more flexible I tend to prefer it.</p>
 <p>It turned out FSelector::cfs chose a poor set of variables. Most of them were almost completely NA! Therefore I will continue to use the Weka CfsSubsetEval selected variables.</p>
 <h1 id="results">Results</h1>
 <p>The goal of this project is to predict the manner in which the test subjects did the exercise. This is the “classe” variable in the training set (depVar below). I chose a random forest model to begin because they usually give high accuracy although there can be runtime (using parallel processing in caret helps with this) and interpretability costs. The feature selection approach is described above and was chosen based on its use by the authors and my desire to use a technique I recently learned in <a href="https://weka.waikato.ac.nz/moredataminingwithweka/course">More Data Mining with Weka</a> in a practical setting.</p>
 <p>10-fold cross validation was chosen as a good starting model validation technique. Even though we have enough data to make a train/test split possible, I like the averaging effect of cross validation and have had good experience using it in caret.</p>
-<p>For out of sample error I would expect something similar to the observed 99% accuracy for the same subjects (user_name) and 20/20 on the submission lends support to that belief. But, I would expect worse results for different subjects. The paper authors did leave one subject out cross validation giving an accuracy of 78% (which seems like a reasonable estimate for new subjects), but I did not feel it was necessary to replicate that technique for this project (but I did, see supplemental analysis where accuracy was only 22%!).</p>
+<p>For out of sample error I would expect something similar to the observed 99% accuracy for the same subjects (user_name) and 20/20 on the submission lends support to that belief. But, I would expect worse results for different subjects. The paper authors did leave one subject out cross validation giving an accuracy of 78% (which seems like a reasonable estimate for new subjects). I did not feel it was necessary to replicate that technique for this project, but I did anyway as part of the supplemental analysis where LOSOCV accuracy was only 22%!.</p>
 <p>The initial intent was for this to be a baseline model, but given the performance I see no need to change it.</p>
 <pre class="r"><code># First try a simple random forest using caret
 library(caret)
 
 # Note multiclass classification adds some issues
+# Since this is a good example of multiclass classification, try out multiClassSummary
+# Use modified multiClassSummary to get as much performance info as possible
+source(&quot;multiClassSummary.R&quot;)
 trainMetric = &quot;Accuracy&quot; # Classification default, a poor metric if uneven split
-trainSummary &lt;- defaultSummary
+trainSummary &lt;- multiClassSummary
 
 fitControl &lt;-
   trainControl(
-               #method = &quot;none&quot;, # For initial testing, requires 1 model (tuneLength or grid)
+               #method = &quot;none&quot;, # For testing, requires 1 model (tuneLength or grid)
                method = &quot;cv&quot;,
                number = 10, # 10 is default
                repeats = 1,
@@ -162,9 +161,6 @@ fitControl &lt;-
 
 rfGrid &lt;- expand.grid(.mtry = c(5, 10))
 
-depVar &lt;- &quot;classe&quot;
-# indVars set in Data Processing above
-
 set.seed(123)
 rfFit &lt;- train(train[,indVars],
                train[,depVar],
@@ -174,16 +170,16 @@ rfFit &lt;- train(train[,indVars],
                #tuneLength = 1, # Run once for debugging
                trControl = fitControl,
                # Following arguments for rf
-               #ntrees = 301, # Try combatting overfitting
                importance=TRUE
                )</code></pre>
+<pre><code>## Warning: There were missing values in resampled performance measures.</code></pre>
 <pre><code>## Aggregating results
 ## Selecting tuning parameters
 ## Fitting mtry = 5 on full training set</code></pre>
 <pre class="r"><code># Run time
 rfFit$times$everything</code></pre>
 <pre><code>##    user  system elapsed 
-##   45.11    1.92 1529.00</code></pre>
+##   47.15    1.76 2197.90</code></pre>
 <pre class="r"><code>rfFit</code></pre>
 <pre><code>## Random Forest 
 ## 
@@ -198,9 +194,27 @@ rfFit$times$everything</code></pre>
 ## 
 ## Resampling results across tuning parameters:
 ## 
-##   mtry  Accuracy  Kappa  Accuracy SD  Kappa SD
-##   5     1         1      0.003        0.004   
-##   10    1         1      0.003        0.004   
+##   mtry  ROC  Sensitivity  Specificity  Accuracy  Kappa  logLoss
+##   5     1    1            1            1         1      0.03   
+##   10    1    1            1            1         1      0.03   
+##   AccuracyLower  AccuracyUpper  AccuracyPValue  McnemarPValue
+##   1              1              0               NaN          
+##   1              1              0               NaN          
+##   Pos_Pred_Value  Neg_Pred_Value  Detection_Rate  Balanced_Accuracy
+##   1               1               0.2             1                
+##   1               1               0.2             1                
+##   ROC SD  Sensitivity SD  Specificity SD  Accuracy SD  Kappa SD
+##   9e-05   0.003           8e-04           0.003        0.004   
+##   2e-04   0.003           8e-04           0.003        0.004   
+##   logLoss SD  AccuracyLower SD  AccuracyUpper SD  AccuracyPValue SD
+##   0.001       0.004             0.002             0                
+##   0.002       0.004             0.003             0                
+##   Pos_Pred_Value SD  Neg_Pred_Value SD  Detection_Rate SD
+##   0.003              8e-04              6e-04            
+##   0.003              8e-04              6e-04            
+##   Balanced_Accuracy SD
+##   0.002               
+##   0.002               
 ## 
 ## Accuracy was used to select the optimal model using  the largest value.
 ## The final value used for the model was mtry = 5.</code></pre>
@@ -222,65 +236,44 @@ rfImp</code></pre>
 ## magnet_belt_z      14.81 35.81 17.18 28.91 32.79
 ## user_name           0.00  4.72  1.08 10.88  4.98</code></pre>
 <pre class="r"><code>plot(rfFit)</code></pre>
-<p><img src="data:image/png;base64,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" alt="plot of chunk results1" /></p>
+<p><img src="data:image/png;base64,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" alt="plot of chunk resultsPerf" /></p>
 <pre class="r"><code># Look at performance
-confusionMatrix(rfFit)</code></pre>
+getTrainPerf(rfFit)</code></pre>
+<pre><code>##   TrainROC TrainSensitivity TrainSpecificity TrainAccuracy TrainKappa
+## 1   0.9999           0.9904           0.9977         0.991     0.9886
+##   TrainlogLoss TrainAccuracyLower TrainAccuracyUpper TrainAccuracyPValue
+## 1       0.0296             0.9858             0.9946                   0
+##   TrainMcnemarPValue TrainPos_Pred_Value TrainNeg_Pred_Value
+## 1                NaN              0.9906              0.9978
+##   TrainDetection_Rate TrainBalanced_Accuracy method
+## 1              0.1982                 0.9941     rf</code></pre>
+<pre class="r"><code>confusionMatrix(rfFit)</code></pre>
 <pre><code>## Cross-Validated (10 fold) Confusion Matrix 
 ## 
 ## (entries are percentages of table totals)
 ##  
 ##           Reference
 ## Prediction    A    B    C    D    E
-##          A 28.4  0.1  0.0  0.0  0.0
-##          B  0.0 19.0  0.1  0.0  0.1
+##          A 28.3  0.1  0.0  0.1  0.0
+##          B  0.0 19.0  0.1  0.0  0.0
 ##          C  0.0  0.3 17.3  0.1  0.0
 ##          D  0.0  0.0  0.0 16.2  0.0
 ##          E  0.0  0.0  0.0  0.0 18.3</code></pre>
 <p>The CV training accuracy is superb at 99%.</p>
 <p>The paper authors presented a confusion matrix for the leave one subject out test with overall accuracy 78.2%. Their overall accuracy (of all data) given was 98.2%.</p>
-<p>Now generate predictions on the test set.</p>
-<pre class="r"><code>correctAnswers &lt;- structure(c(2L, 1L, 2L, 1L, 1L, 5L, 4L, 2L, 1L, 1L, 2L, 3L, 2L, 
-                              1L, 5L, 5L, 1L, 2L, 2L, 2L),
-                            .Label = c(&quot;A&quot;, &quot;B&quot;, &quot;C&quot;, &quot;D&quot;, &quot;E&quot; ),
-                            class = &quot;factor&quot;)
-rfPred &lt;- predict(rfFit, newdata=test[,indVars])
-
-# Convert the answers to strings and print
-answers = as.character(rfPred)
-rbind(test$X, answers)</code></pre>
-<pre><code>##         [,1] [,2] [,3] [,4] [,5] [,6] [,7] [,8] [,9] [,10] [,11] [,12]
-##         &quot;1&quot;  &quot;2&quot;  &quot;3&quot;  &quot;4&quot;  &quot;5&quot;  &quot;6&quot;  &quot;7&quot;  &quot;8&quot;  &quot;9&quot;  &quot;10&quot;  &quot;11&quot;  &quot;12&quot; 
-## answers &quot;B&quot;  &quot;A&quot;  &quot;B&quot;  &quot;A&quot;  &quot;A&quot;  &quot;E&quot;  &quot;D&quot;  &quot;B&quot;  &quot;A&quot;  &quot;A&quot;   &quot;B&quot;   &quot;C&quot;  
-##         [,13] [,14] [,15] [,16] [,17] [,18] [,19] [,20]
-##         &quot;13&quot;  &quot;14&quot;  &quot;15&quot;  &quot;16&quot;  &quot;17&quot;  &quot;18&quot;  &quot;19&quot;  &quot;20&quot; 
-## answers &quot;B&quot;   &quot;A&quot;   &quot;E&quot;   &quot;E&quot;   &quot;A&quot;   &quot;B&quot;   &quot;B&quot;   &quot;B&quot;</code></pre>
-<pre class="r"><code># Write the answers to individual files for submission
-pml_write_files = function(x){
-  n = length(x)
-  for(i in 1:n){
-    filename = paste0(&quot;./answers/problem_id_&quot;,i,&quot;.txt&quot;)
-    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
-  }
-}
-pml_write_files(answers)</code></pre>
+<p>Now generate predictions on the test set and write to files in the answers directory for submission.</p>
 <p>20 out of 20 answers correct.</p>
 <p>This is the end of the official submission. Below this is some supplemental analysis which I thought might be of interest, but should not be included in the grading.</p>
 <h1 id="supplemental-analysis-not-to-be-graded">Supplemental Analysis (not to be graded)</h1>
 <h2 id="decision-tree">Decision Tree</h2>
 <p>Although accurate, the random forest model above is not very interpretable. Try a decision tree model here to see if we learn anything more about the data.</p>
-<p>multiClassSummary code not working properly.</p>
-<pre class="r"><code># Since this is a good example of multi class classification try out multiClassSummary
-# Use modified multiClassSummary to get as much performance info as possible
-source(&quot;multiClassSummary.R&quot;)
-
-fitControlMulti &lt;-
+<pre class="r"><code>fitControlMulti &lt;-
   trainControl(method = &quot;cv&quot;,
                number = 10, # 10 is default
                repeats = 1,
                verboseIter = TRUE, # Debug, seems to be proving helpful
                classProbs = TRUE, # Needed for twoClassSummary
-               summaryFunction = multiClassSummary, # Not working as expected?
-               #summaryFunction = trainSummary,
+               summaryFunction = trainSummary,
                selectionFunction = &quot;best&quot;, # default, see ?best
                allowParallel = usingParallel
                )
@@ -294,17 +287,16 @@ rpartFit &lt;- train(train[,indVars],
                   metric = trainMetric,
                   tuneGrid = rpartGrid,
                   #tuneLength = 1, # Run once for debugging
-                  trControl = fitControl
+                  trControl = fitControlMulti
+                  #trControl = fitControl
                   # Following arguments for rpart
                   )</code></pre>
+<pre><code>## Warning: There were missing values in resampled performance measures.</code></pre>
 <pre><code>## Aggregating results
 ## Selecting tuning parameters
 ## Fitting cp = 0.02 on full training set</code></pre>
-<pre class="r"><code># Run time
-rpartFit$times$everything</code></pre>
 <pre><code>##    user  system elapsed 
-##    2.12    0.11   12.35</code></pre>
-<pre class="r"><code>rpartFit</code></pre>
+##    1.92    0.13   43.81</code></pre>
 <pre><code>## CART 
 ## 
 ## 19622 samples
@@ -318,19 +310,39 @@ rpartFit$times$everything</code></pre>
 ## 
 ## Resampling results across tuning parameters:
 ## 
-##   cp    Accuracy  Kappa  Accuracy SD  Kappa SD
-##   0.02  0.6       0.5    0.02         0.03    
-##   0.05  0.4       0.1    0.005        0.007   
+##   cp    ROC  Sensitivity  Specificity  Accuracy  Kappa  logLoss
+##   0.02  0.8  0.6          0.9          0.6       0.5    0.3    
+##   0.05  0.6  0.3          0.8          0.4       0.1    0.4    
+##   AccuracyLower  AccuracyUpper  AccuracyPValue  McnemarPValue
+##   0.6            0.6            2e-141          2e-26        
+##   0.3            0.4            2e-13           NaN          
+##   Pos_Pred_Value  Neg_Pred_Value  Detection_Rate  Balanced_Accuracy
+##   0.6             0.9             0.1             0.7              
+##   NaN             0.9             0.07            0.6              
+##   ROC SD  Sensitivity SD  Specificity SD  Accuracy SD  Kappa SD
+##   0.02    0.02            0.005           0.02         0.03    
+##   0.005   0.005           0.001           0.005        0.007   
+##   logLoss SD  AccuracyLower SD  AccuracyUpper SD  AccuracyPValue SD
+##   0.01        0.02              0.02              8e-141           
+##   0.003       0.005             0.005             5e-13            
+##   McnemarPValue SD  Pos_Pred_Value SD  Neg_Pred_Value SD
+##   6e-26             0.02               0.004            
+##   NA                NA                 0.001            
+##   Detection_Rate SD  Balanced_Accuracy SD
+##   0.004              0.01                
+##   0.001              0.003               
 ## 
 ## Accuracy was used to select the optimal model using  the largest value.
 ## The final value used for the model was cp = 0.02.</code></pre>
-<pre class="r"><code>plot(rpartFit)</code></pre>
-<p><img src="data:image/png;base64,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" alt="plot of chunk tree" /></p>
-<pre class="r"><code># Look at performance
-getTrainPerf(rpartFit)</code></pre>
-<pre><code>##   TrainAccuracy TrainKappa method
-## 1        0.6045     0.5002  rpart</code></pre>
-<pre class="r"><code>confusionMatrix(rpartFit)</code></pre>
+<p><img src="data:image/png;base64,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" alt="plot of chunk treePerf" /></p>
+<pre><code>##   TrainROC TrainSensitivity TrainSpecificity TrainAccuracy TrainKappa
+## 1   0.8419           0.5956           0.9005        0.6045     0.5002
+##   TrainlogLoss TrainAccuracyLower TrainAccuracyUpper TrainAccuracyPValue
+## 1       0.3301             0.5825             0.6262          2.393e-141
+##   TrainMcnemarPValue TrainPos_Pred_Value TrainNeg_Pred_Value
+## 1          2.006e-26              0.6361              0.9013
+##   TrainDetection_Rate TrainBalanced_Accuracy method
+## 1              0.1209                  0.748  rpart</code></pre>
 <pre><code>## Cross-Validated (10 fold) Confusion Matrix 
 ## 
 ## (entries are percentages of table totals)
@@ -342,51 +354,19 @@ getTrainPerf(rpartFit)</code></pre>
 ##          C  2.8  2.5 12.4  3.5  2.6
 ##          D  3.7  3.7  1.7  8.5  2.9
 ##          E  1.2  0.1  0.1  1.3 10.9</code></pre>
-<pre class="r"><code># multi class performance code not working as I would like
-library(plyr)</code></pre>
-<pre><code>## Warning: package 'plyr' was built under R version 3.0.3</code></pre>
-<pre class="r"><code>allProb &lt;- extractProb(list(rpartFit),
-                       testX = train[, indVars],
-                       testY = train[, depVar])
-trainProb &lt;- subset(allProb, dataType == &quot;Test&quot;)
-str(trainProb)</code></pre>
-<pre><code>## 'data.frame':    19622 obs. of  10 variables:
-##  $ A       : num  0.994 0.994 0.994 0.994 0.994 ...
-##  $ B       : num  0.00634 0.00634 0.00634 0.00634 0.00634 ...
-##  $ C       : num  0 0 0 0 0 0 0 0 0 0 ...
-##  $ D       : num  0 0 0 0 0 0 0 0 0 0 ...
-##  $ E       : num  0 0 0 0 0 0 0 0 0 0 ...
-##  $ obs     : Factor w/ 5 levels &quot;A&quot;,&quot;B&quot;,&quot;C&quot;,&quot;D&quot;,..: 1 1 1 1 1 1 1 1 1 1 ...
-##  $ pred    : Factor w/ 5 levels &quot;A&quot;,&quot;B&quot;,&quot;C&quot;,&quot;D&quot;,..: 1 1 1 1 1 1 1 1 1 1 ...
-##  $ model   : chr  &quot;rpart&quot; &quot;rpart&quot; &quot;rpart&quot; &quot;rpart&quot; ...
-##  $ dataType: chr  &quot;Test&quot; &quot;Test&quot; &quot;Test&quot; &quot;Test&quot; ...
-##  $ object  : chr  &quot;Object1&quot; &quot;Object1&quot; &quot;Object1&quot; &quot;Object1&quot; ...</code></pre>
-<pre class="r"><code>summary3 &lt;- ddply(trainProb, .(model),
-                  function(x) multiClassSummary(x, lev=train[, depVar]))</code></pre>
-<pre><code>## Loading required package: Metrics</code></pre>
-<pre class="r"><code>print(summary3)</code></pre>
-<pre><code>##   model  ROC NA NA Accuracy  Kappa logLoss AccuracyLower AccuracyUpper
-## 1 rpart 0.87 NA NA   0.6176 0.5168  0.3651        0.6108        0.6244
-##   AccuracyPValue McnemarPValue NA NA NA NA
-## 1              0    7.326e-317 NA NA NA NA</code></pre>
-<pre class="r"><code># Look at the tree itself
-library(rattle)
-png(&quot;CourseProjectTree.png&quot;, width=1500, height=800)
-fancyRpartPlot(rpartFit$finalModel)
-dev.off()</code></pre>
 <pre><code>## pdf 
 ##   2</code></pre>
 <p>The accuracy is clearly inferior to random forest, but for small cp is not that bad.</p>
-<p>The tree was too large to display inline, but the PNG is available in the repository.</p>
+<p>The tree was too large to display inline, but a PNG of it is available in the repository as CourseProjectTree.png</p>
 <h2 id="leave-one-subject-out-cross-validation">Leave One Subject Out Cross Validation</h2>
 <p>Mentioned above as being outside of the scope of this project I thought this would be a useful technique to know how to use in the future so decided to try to implement it here.</p>
 <p>Henceforth called LOSOCV. (aka LOSOXV)</p>
 <p>Most straightforward way to do this appears to be using the index argument to trainControl: <a href="http://stats.stackexchange.com/questions/93227/how-to-implement-a-hold-out-validation-in-r">http://stats.stackexchange.com/questions/93227/how-to-implement-a-hold-out-validation-in-r</a><br />It is unclear to me if/how LGOCV method in trainControl relates to this.</p>
-<p>Did not succeed with this. Initial work left below in case I want to revisit (code not echoed).</p>
 <p>Some discussion of <a href="http://stats.stackexchange.com/questions/62823/correct-setup-for-leave-one-subject-out-cross-validation?rq=1">leave-one-subject-out cross-validation</a><br /><a href="http://arxiv.org/abs/0907.4728">A survey of cross-validation procedures for model selection</a><br /><a href="http://www.kaggle.com/c/decoding-the-human-brain/forums/t/8107/clarification-please-public-and-private-split-on-the-leaderboard/44332">LOSOCV at Kaggle</a></p>
 <pre class="r"><code>subject &lt;- train[,&quot;user_name&quot;]
 subjectFolds &lt;- length(levels(subject))
 
+# Create folds by subject
 subjectIndexes &lt;- list()
 for (i in 1:length(levels(subject))){ 
   subjectIndexes[[paste0(&quot;Fold&quot;,i)]] = which(subject == levels(subject)[i])
@@ -430,15 +410,15 @@ rfFitLOSOCV &lt;- train(train[,indVars],
                      #tuneLength = 1, # Run once for debugging
                      trControl = fitControlLOSOCV,
                      # Following arguments for rf
-                     #ntrees = 301, # Try combatting overfitting
                      importance=TRUE
                      )</code></pre>
+<pre><code>## Warning: There were missing values in resampled performance measures.</code></pre>
 <pre><code>## Aggregating results
 ## Fitting final model on full training set</code></pre>
 <pre class="r"><code># Run time
 rfFitLOSOCV$times$everything</code></pre>
 <pre><code>##    user  system elapsed 
-##   43.21    0.89   61.62</code></pre>
+##   45.60    0.67   94.07</code></pre>
 <pre class="r"><code>rfFitLOSOCV</code></pre>
 <pre><code>## Random Forest 
 ## 
@@ -453,8 +433,20 @@ rfFitLOSOCV$times$everything</code></pre>
 ## 
 ## Resampling results
 ## 
-##   Accuracy  Kappa  Accuracy SD  Kappa SD
-##   0.2       0.05   0.06         0.06    
+##   ROC  Sensitivity  Specificity  Accuracy  Kappa  logLoss  AccuracyLower
+##   0.6  0.2          0.8          0.2       0.05   0.8      0.2          
+##   AccuracyUpper  AccuracyPValue  McnemarPValue  Pos_Pred_Value
+##   0.2            0.8             0              0.3           
+##   Neg_Pred_Value  Detection_Rate  Balanced_Accuracy  ROC SD
+##   0.8             0.05            0.5                0.06  
+##   Sensitivity SD  Specificity SD  Accuracy SD  Kappa SD  logLoss SD
+##   0.04            0.01            0.05         0.05      0.2       
+##   AccuracyLower SD  AccuracyUpper SD  AccuracyPValue SD  McnemarPValue SD
+##   0.05              0.05              0.4                0               
+##   Pos_Pred_Value SD  Neg_Pred_Value SD  Detection_Rate SD
+##   0.02               0.01               0.009            
+##   Balanced_Accuracy SD
+##   0.03                
 ## 
 ## Tuning parameter 'mtry' was held constant at a value of 5
 ## </code></pre>
@@ -477,8 +469,14 @@ rfImpLOSOCV</code></pre>
 ## user_name           0.00  6.7  2.56 10.82  6.74</code></pre>
 <pre class="r"><code># Look at performance
 getTrainPerf(rfFitLOSOCV)</code></pre>
-<pre><code>##   TrainAccuracy TrainKappa method
-## 1          0.23    0.04565     rf</code></pre>
+<pre><code>##   TrainROC TrainSensitivity TrainSpecificity TrainAccuracy TrainKappa
+## 1   0.5889           0.2371           0.8102        0.2344    0.04933
+##   TrainlogLoss TrainAccuracyLower TrainAccuracyUpper TrainAccuracyPValue
+## 1       0.8474              0.228              0.241              0.8333
+##   TrainMcnemarPValue TrainPos_Pred_Value TrainNeg_Pred_Value
+## 1                  0              0.2852              0.8146
+##   TrainDetection_Rate TrainBalanced_Accuracy method
+## 1             0.04689                 0.5237     rf</code></pre>
 <pre class="r"><code>confusionMatrix(rfFitLOSOCV)</code></pre>
 <pre><code>## Cross-Validated (6 fold) Confusion Matrix 
 ## 
@@ -486,11 +484,11 @@ getTrainPerf(rfFitLOSOCV)</code></pre>
 ##  
 ##           Reference
 ## Prediction    A    B    C    D    E
-##          A  4.4  2.1  2.1  1.4  1.1
-##          B  4.3  4.1  2.3  2.7  2.6
-##          C  2.8  1.4  1.4  0.7  0.6
-##          D  2.1  2.2  1.8  2.0  3.0
-##          E 14.8  9.5  9.8  9.5 11.1</code></pre>
+##          A  5.1  2.2  2.2  1.5  1.4
+##          B  4.5  4.3  2.5  3.0  2.6
+##          C  2.8  1.4  1.4  0.7  0.5
+##          D  2.0  2.1  1.7  1.8  3.0
+##          E 14.1  9.4  9.7  9.3 10.9</code></pre>
 <p>It turns out this model is virtually useless for predicting subjects not included in the training set!</p>
 <p>Try using a different set of variables (not including user_name) from cfsSubsetEval in Weka.</p>
 <pre class="r"><code># Weka CfsSubsetEval came up with this list after removing a few, merit 0.266
@@ -511,15 +509,15 @@ rfFitLOSOCV1 &lt;- train(train[,wekaVars1],
                       #tuneLength = 1, # Run once for debugging
                       trControl = fitControlLOSOCV,
                       # Following arguments for rf
-                      #ntrees = 301, # Try combatting overfitting
                       importance=TRUE
                       )</code></pre>
+<pre><code>## Warning: There were missing values in resampled performance measures.</code></pre>
 <pre><code>## Aggregating results
 ## Fitting final model on full training set</code></pre>
 <pre class="r"><code># Run time
 rfFitLOSOCV1$times$everything</code></pre>
 <pre><code>##    user  system elapsed 
-##   40.42    0.67   57.26</code></pre>
+##   42.27    1.04  287.15</code></pre>
 <pre class="r"><code>rfFitLOSOCV1</code></pre>
 <pre><code>## Random Forest 
 ## 
@@ -534,8 +532,20 @@ rfFitLOSOCV1$times$everything</code></pre>
 ## 
 ## Resampling results
 ## 
-##   Accuracy  Kappa  Accuracy SD  Kappa SD
-##   0.2       0.04   0.07         0.07    
+##   ROC  Sensitivity  Specificity  Accuracy  Kappa  logLoss  AccuracyLower
+##   0.6  0.2          0.8          0.2       0.04   0.9      0.2          
+##   AccuracyUpper  AccuracyPValue  McnemarPValue  Pos_Pred_Value
+##   0.2            0.8             0              0.3           
+##   Neg_Pred_Value  Detection_Rate  Balanced_Accuracy  ROC SD
+##   0.8             0.05            0.5                0.06  
+##   Sensitivity SD  Specificity SD  Accuracy SD  Kappa SD  logLoss SD
+##   0.05            0.01            0.06         0.06      0.2       
+##   AccuracyLower SD  AccuracyUpper SD  AccuracyPValue SD  McnemarPValue SD
+##   0.06              0.06              0.4                0               
+##   Pos_Pred_Value SD  Neg_Pred_Value SD  Detection_Rate SD
+##   0.06               0.02               0.01             
+##   Balanced_Accuracy SD
+##   0.03                
 ## 
 ## Tuning parameter 'mtry' was held constant at a value of 5
 ## </code></pre>
@@ -557,8 +567,14 @@ rfImpLOSOCV1</code></pre>
 ## magnet_belt_z      12.89 35.4 10.4 29.10 35.33</code></pre>
 <pre class="r"><code># Look at CV performance
 getTrainPerf(rfFitLOSOCV1)</code></pre>
-<pre><code>##   TrainAccuracy TrainKappa method
-## 1        0.2221    0.03735     rf</code></pre>
+<pre><code>##   TrainROC TrainSensitivity TrainSpecificity TrainAccuracy TrainKappa
+## 1   0.5888           0.2328           0.8086        0.2269    0.04198
+##   TrainlogLoss TrainAccuracyLower TrainAccuracyUpper TrainAccuracyPValue
+## 1       0.8779             0.2206             0.2334              0.8333
+##   TrainMcnemarPValue TrainPos_Pred_Value TrainNeg_Pred_Value
+## 1                  0              0.2545              0.8119
+##   TrainDetection_Rate TrainBalanced_Accuracy method
+## 1             0.04539                 0.5207     rf</code></pre>
 <pre class="r"><code>confusionMatrix(rfFitLOSOCV1)</code></pre>
 <pre><code>## Cross-Validated (6 fold) Confusion Matrix 
 ## 
@@ -566,11 +582,11 @@ getTrainPerf(rfFitLOSOCV1)</code></pre>
 ##  
 ##           Reference
 ## Prediction    A    B    C    D    E
-##          A  3.5  1.9  1.8  1.4  1.1
-##          B  4.4  4.2  2.5  2.8  2.7
-##          C  3.0  1.6  1.5  0.8  0.7
-##          D  2.1  2.1  1.8  2.0  2.9
-##          E 15.4  9.5  9.9  9.4 11.0</code></pre>
+##          A  4.1  2.0  2.0  1.5  1.2
+##          B  4.5  4.3  2.6  2.9  2.7
+##          C  2.8  1.5  1.4  0.7  0.6
+##          D  2.0  2.1  1.7  1.9  2.9
+##          E 14.9  9.4  9.8  9.4 11.0</code></pre>
 <pre class="r"><code># Look at performance of the final model.  This will overfit since it uses the entire
 # training set to fit the model.
 predLOSOCV1 &lt;- predict(rfFitLOSOCV1)#, train[,wekaVars1])
@@ -607,7 +623,7 @@ confusionMatrix(train$classe, predLOSOCV1)</code></pre>
 ## Detection Prevalence    0.284    0.194    0.174    0.164    0.184
 ## Balanced Accuracy       1.000    1.000    1.000    1.000    1.000</code></pre>
 <p>This model is still virtually useless for predicting subjects outside of the training set! Note the difference between the CV accuracy (usually a good estimate for out of sample) and the accuracy on the entire training set (grossly overfit).</p>
-<p>I am impressed by the 78.2% LOSOCV accuracy quoted in the paper. Working to replicate that would be worthwhile, but I have already exceeded my time budget for this project.</p>
+<p>I am impressed by the 78.2% LOSOCV accuracy quoted in the paper. Working to replicate that would be worthwhile, but I have already exceeded my time budget for this project. Section 5. DETECTION OF MISTAKES states that there were six subjects so I don’t think the authors used more users/data than was made available to us.</p>
 <div class="references">
 
 </div>

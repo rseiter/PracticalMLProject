@@ -10,7 +10,7 @@ Synopsis
 
 The goal of this project is to use the supplied datasets (accelerometer data tagged with one of five classes of performance, see Data below) to predict the performance class of 20 new observations.  This report outlines an approach using feature selection with cfsSubsetEval in Weka and a cross validated random forest model which achieves over 99% cross validation accuracy and 20/20 correct on the test data.
 
-```{r init, cache=FALSE, message=F, warning=F}
+```{r init, cache=FALSE, echo=F, message=F, warning=F}
 # Enable caching
 require(knitr)
 opts_chunk$set(cache=TRUE, autodep=TRUE)
@@ -94,8 +94,10 @@ intersect(wekaVars, cfsVars)
 # setdiff(cfsVars, wekaVars)
 # setdiff(wekaVars, cfsVars)
 
+# Set dependent and independent variables we will use below
+depVar <- "classe"
 indVars <- wekaVars
-# indVars <- cfsVars # Try this for comparison
+# indVars <- cfsVars # Try this for comparison (results were unsatisfactory)
 ```
 
 The variable lists returned by FSelector and Weka are surprisingly different given they use a similar algorithm.  Given that the Weka implementation was done by M. A. Hall (who wrote the original paper describing the technique) and is more flexible I tend to prefer it.
@@ -132,21 +134,24 @@ The goal of this project is to predict the manner in which the test subjects did
 
 10-fold cross validation was chosen as a good starting model validation technique.  Even though we have enough data to make a train/test split possible, I like the averaging effect of cross validation and have had good experience using it in caret.
 
-For out of sample error I would expect something similar to the observed 99% accuracy for the same subjects (user_name) and 20/20 on the submission lends support to that belief.  But, I would expect worse results for different subjects.  The paper authors did leave one subject out cross validation giving an accuracy of 78% (which seems like a reasonable estimate for new subjects), but I did not feel it was necessary to replicate that technique for this project (but I did, see supplemental analysis where accuracy was only 22%!).
+For out of sample error I would expect something similar to the observed 99% accuracy for the same subjects (user_name) and 20/20 on the submission lends support to that belief.  But, I would expect worse results for different subjects.  The paper authors did leave one subject out cross validation giving an accuracy of 78% (which seems like a reasonable estimate for new subjects).  I did not feel it was necessary to replicate that technique for this project, but I did anyway as part of the supplemental analysis where LOSOCV accuracy was only 22%!.
 
 The initial intent was for this to be a baseline model, but given the performance I see no need to change it.
 
-```{r results1}
+```{r resultsTrain}
 # First try a simple random forest using caret
 library(caret)
 
 # Note multiclass classification adds some issues
+# Since this is a good example of multiclass classification, try out multiClassSummary
+# Use modified multiClassSummary to get as much performance info as possible
+source("multiClassSummary.R")
 trainMetric = "Accuracy" # Classification default, a poor metric if uneven split
-trainSummary <- defaultSummary
+trainSummary <- multiClassSummary
 
 fitControl <-
   trainControl(
-               #method = "none", # For initial testing, requires 1 model (tuneLength or grid)
+               #method = "none", # For testing, requires 1 model (tuneLength or grid)
                method = "cv",
                number = 10, # 10 is default
                repeats = 1,
@@ -159,9 +164,6 @@ fitControl <-
 
 rfGrid <- expand.grid(.mtry = c(5, 10))
 
-depVar <- "classe"
-# indVars set in Data Processing above
-
 set.seed(123)
 rfFit <- train(train[,indVars],
                train[,depVar],
@@ -171,10 +173,12 @@ rfFit <- train(train[,indVars],
                #tuneLength = 1, # Run once for debugging
                trControl = fitControl,
                # Following arguments for rf
-               #ntrees = 301, # Try combatting overfitting
                importance=TRUE
                )
+```
 
+
+```{r resultsPerf}
 # Run time
 rfFit$times$everything
 
@@ -186,6 +190,7 @@ rfImp
 plot(rfFit)
 
 # Look at performance
+getTrainPerf(rfFit)
 confusionMatrix(rfFit)
 ```
 
@@ -193,18 +198,18 @@ The CV training accuracy is superb at 99%.
 
 The paper authors presented a confusion matrix for the leave one subject out test with overall accuracy 78.2%.  Their overall accuracy (of all data) given was 98.2%.
 
-Now generate predictions on the test set.
+Now generate predictions on the test set and write to files in the answers directory for submission.
 
-```{r predict}
+```{r predict, echo=FALSE}
 correctAnswers <- structure(c(2L, 1L, 2L, 1L, 1L, 5L, 4L, 2L, 1L, 1L, 2L, 3L, 2L, 
                               1L, 5L, 5L, 1L, 2L, 2L, 2L),
                             .Label = c("A", "B", "C", "D", "E" ),
                             class = "factor")
 rfPred <- predict(rfFit, newdata=test[,indVars])
 
-# Convert the answers to strings and print
+# Convert the answers to strings and print (output turned off for submission)
 answers = as.character(rfPred)
-rbind(test$X, answers)
+#rbind(test$X, answers)
 
 # Write the answers to individual files for submission
 pml_write_files = function(x){
@@ -230,21 +235,14 @@ Decision Tree
 
 Although accurate, the random forest model above is not very interpretable.  Try a decision tree model here to see if we learn anything more about the data.
 
-multiClassSummary code not working properly.
-
-```{r tree}
-# Since this is a good example of multi class classification try out multiClassSummary
-# Use modified multiClassSummary to get as much performance info as possible
-source("multiClassSummary.R")
-
+```{r treeTrain}
 fitControlMulti <-
   trainControl(method = "cv",
                number = 10, # 10 is default
                repeats = 1,
                verboseIter = TRUE, # Debug, seems to be proving helpful
                classProbs = TRUE, # Needed for twoClassSummary
-               summaryFunction = multiClassSummary, # Not working as expected?
-               #summaryFunction = trainSummary,
+               summaryFunction = trainSummary,
                selectionFunction = "best", # default, see ?best
                allowParallel = usingParallel
                )
@@ -258,10 +256,13 @@ rpartFit <- train(train[,indVars],
                   metric = trainMetric,
                   tuneGrid = rpartGrid,
                   #tuneLength = 1, # Run once for debugging
-                  trControl = fitControl
+                  trControl = fitControlMulti
+                  #trControl = fitControl
                   # Following arguments for rpart
                   )
+```
 
+```{r treePerf, echo=FALSE}
 # Run time
 rpartFit$times$everything
 
@@ -273,27 +274,30 @@ plot(rpartFit)
 getTrainPerf(rpartFit)
 confusionMatrix(rpartFit)
 
-# multi class performance code not working as I would like
-library(plyr)
-allProb <- extractProb(list(rpartFit),
-                       testX = train[, indVars],
-                       testY = train[, depVar])
-trainProb <- subset(allProb, dataType == "Test")
-str(trainProb)
-summary3 <- ddply(trainProb, .(model),
-                  function(x) multiClassSummary(x, lev=train[, depVar]))
-print(summary3)
+# library(plyr)
+# allProb <- extractProb(list(rpartFit),
+#                        testX = train[, indVars],
+#                        testY = train[, depVar])
+# trainProb <- subset(allProb, dataType == "Test")
+# str(trainProb)
+# summary3 <- ddply(trainProb, .(model),
+#                   function(x) multiClassSummary(x, lev=train[, depVar]))
+# print(summary3)
+# summary4 <- ddply(trainProb, .(model),
+#                   function(x) defaultSummary(x, lev=train[, depVar]))
+# print(summary4)
 
 # Look at the tree itself
 library(rattle)
-png("CourseProjectTree.png", width=1500, height=800)
+treeFileName <- "CourseProjectTree.png"
+png(treeFileName, width=1500, height=800)
 fancyRpartPlot(rpartFit$finalModel)
 dev.off()
 ```
 
 The accuracy is clearly inferior to random forest, but for small cp is not that bad.
 
-The tree was too large to display inline, but the PNG is available in the repository.
+The tree was too large to display inline, but a PNG of it is available in the repository as `r treeFileName`
 
 
 Leave One Subject Out Cross Validation
@@ -306,16 +310,15 @@ Henceforth called LOSOCV. (aka LOSOXV)
 Most straightforward way to do this appears to be using the index argument to trainControl: http://stats.stackexchange.com/questions/93227/how-to-implement-a-hold-out-validation-in-r  
 It is unclear to me if/how LGOCV method in trainControl relates to this.
 
-Did not succeed with this.  Initial work left below in case I want to revisit (code not echoed).
-
 Some discussion of [leave-one-subject-out cross-validation](http://stats.stackexchange.com/questions/62823/correct-setup-for-leave-one-subject-out-cross-validation?rq=1)  
 [A survey of cross-validation procedures for model selection](http://arxiv.org/abs/0907.4728)  
 [LOSOCV at Kaggle](http://www.kaggle.com/c/decoding-the-human-brain/forums/t/8107/clarification-please-public-and-private-split-on-the-leaderboard/44332)
 
-```{r LOSOCV, echo=T, eval=T}
+```{r LOSOCVtrain, echo=T, eval=T}
 subject <- train[,"user_name"]
 subjectFolds <- length(levels(subject))
 
+# Create folds by subject
 subjectIndexes <- list()
 for (i in 1:length(levels(subject))){ 
   subjectIndexes[[paste0("Fold",i)]] = which(subject == levels(subject)[i])
@@ -352,10 +355,11 @@ rfFitLOSOCV <- train(train[,indVars],
                      #tuneLength = 1, # Run once for debugging
                      trControl = fitControlLOSOCV,
                      # Following arguments for rf
-                     #ntrees = 301, # Try combatting overfitting
                      importance=TRUE
                      )
+```
 
+```{r LOSOCVperf, echo=T, eval=T}
 # Run time
 rfFitLOSOCV$times$everything
 
@@ -373,7 +377,7 @@ It turns out this model is virtually useless for predicting subjects not include
 
 Try using a different set of variables (not including user_name) from cfsSubsetEval in Weka.
 
-```{r LOSOCV1, echo=T, eval=T}
+```{r LOSOCV1train, echo=T, eval=T}
 # Weka CfsSubsetEval came up with this list after removing a few, merit 0.266
 # 3,4,5,61,109,115,118 : 7
 # This is a subset of the original set so just try removing user_name from the original
@@ -392,10 +396,11 @@ rfFitLOSOCV1 <- train(train[,wekaVars1],
                       #tuneLength = 1, # Run once for debugging
                       trControl = fitControlLOSOCV,
                       # Following arguments for rf
-                      #ntrees = 301, # Try combatting overfitting
                       importance=TRUE
                       )
+```
 
+```{r LOSOCV1perf, echo=T, eval=T}
 # Run time
 rfFitLOSOCV1$times$everything
 
@@ -416,7 +421,7 @@ confusionMatrix(train$classe, predLOSOCV1)
 
 This model is still virtually useless for predicting subjects outside of the training set!  Note the difference between the CV accuracy (usually a good estimate for out of sample) and the accuracy on the entire training set (grossly overfit).
 
-I am impressed by the 78.2% LOSOCV accuracy quoted in the paper.  Working to replicate that would be worthwhile, but I have already exceeded my time budget for this project.
+I am impressed by the 78.2% LOSOCV accuracy quoted in the paper.  Working to replicate that would be worthwhile, but I have already exceeded my time budget for this project.  Section 5. DETECTION OF MISTAKES states that there were six subjects so I don't think the authors used more users/data than was made available to us.
 
 ```{r finishParallel, echo=FALSE, cache=FALSE}
 # Close clusters after model training complete
