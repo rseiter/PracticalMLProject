@@ -1,0 +1,201 @@
+---
+title: "Practical Machine Learning Quiz 4 Question 2"
+author: "Rich Seiter"
+date: "Monday, June 23, 2014"
+output: html_document
+---
+
+```{r init, cache=FALSE, echo=FALSE, warning=FALSE, message=FALSE}
+# Model training is a bit time consuming so cache
+# I seem to be having trouble with caching (may want to revert to explicit dependencies)
+# See ?opts_chunk and ?dep_auto
+require(knitr)
+opts_chunk$set(cache=TRUE, autodep=TRUE)
+dep_auto() # figure out dependencies automatically
+```
+
+I found this quiz question very frustrating.  The answers I obtained did not agree with the choices (see [Quiz 4 - Model Stacking, answer seems wrong](https://class.coursera.org/predmachlearn-002/forum/thread?thread_id=137)) and I think the stacking technique used was suboptimal for a classification problem (why not use probabilities instead of predictions?).
+
+To salvage something from this experience I decided to use this as an opportunity to create an example using [caretEnsemble](https://github.com/zachmayer/caretEnsemble).  First install (from Github, if necessary) and load the package.  This installs the Dev package to get tests and also runs those tests.
+
+The source code for this file resides in https://github.com/rseiter/PracticalMLProject/CaretEnsembleExample.Rmd and the resulting HTML can be viewed at http://rseiter.github.io/PracticalMLProject/CaretEnsembleExample.html
+
+```{r load, warning=FALSE, message=FALSE}
+library(caret)
+
+if(!require(caretEnsemble)){
+  library(devtools)
+  library(testthat)
+  #install_github('zachmayer/caretEnsemble') #Master branch (currently has no tests)
+  install_github('zachmayer/caretEnsemble', ref = 'Dev') #Dev branch
+  test_package('caretEnsemble') #Run tests
+}
+```
+
+The initial setup and model training is similar to the quiz question (note that this does NOT provide an answer, the seeds are different) except for the addition of a trainControl whuch runs 10-fold CV with the same resampling indexes (required for caretEnsemble to work correctly).
+
+```{r trainModels}
+set.seed(123)
+library(AppliedPredictiveModeling)
+data(AlzheimerDisease)
+adData = data.frame(diagnosis,predictors)
+inTrain = createDataPartition(adData$diagnosis, p = 3/4)[[1]]
+training = adData[ inTrain,]
+testing = adData[-inTrain,]
+
+set.seed(123)
+folds=10
+repeats=1
+# Try using ROC (AUC) as metric since that is what caretEnsemble uses
+trainMetric = "ROC" # Classification, required for some two class analyses
+# Use multiClassSummary to get more complete performance information
+# setwd("~/Education/Coursera - Practical Machine Learning/Course Project/PracticalMLProject")
+source("multiClassSummary.R")
+trainSummary <- multiClassSummary
+fitControl <-
+  trainControl(method = "cv",
+               number = folds, # 10 is default
+               repeats = repeats,
+               index=createMultiFolds(training$diagnosis, k=folds, times=repeats), # For caretEnsemble, make the resampling indexes all the same.
+               savePredictions = TRUE,
+               classProbs = TRUE, # Needed for twoClassSummary
+               summaryFunction = trainSummary
+)
+
+modelFitQ2rf  <- train(diagnosis ~ ., training, method="rf", metric=trainMetric,
+                       trControl = fitControl)
+modelFitQ2gbm <- train(diagnosis ~ ., training, method="gbm", metric=trainMetric,
+                       trControl = fitControl, verbose=FALSE)
+modelFitQ2lda <- train(diagnosis ~ ., training, method="lda", metric=trainMetric,
+                       trControl = fitControl)
+```
+
+Now look at the performance results for the base models.
+
+```{r modelResults}
+# Check CV results
+modelFitQ2rf
+modelFitQ2gbm
+modelFitQ2lda
+getTrainPerf(modelFitQ2rf)
+getTrainPerf(modelFitQ2gbm)
+getTrainPerf(modelFitQ2lda)
+
+# Look at model parameter optimization
+plot(modelFitQ2rf)
+plot(modelFitQ2gbm)
+
+# Check test results
+testPredQ2rf <-  predict(modelFitQ2rf,  newdata=testing)
+testPredQ2gbm <- predict(modelFitQ2gbm, newdata=testing)
+testPredQ2lda <- predict(modelFitQ2lda, newdata=testing)
+confusionMatrix(testPredQ2rf,  testing$diagnosis)
+confusionMatrix(testPredQ2gbm, testing$diagnosis)
+confusionMatrix(testPredQ2lda, testing$diagnosis)
+```
+
+Now create a caretEnsemble model using the RF, GBM, and LDA base models.  This creates a simple weighted blend.  See ?caretEnsemble (including paper reference at the end) for more information.
+
+```{r trainEnsemble}
+# First create a list of models to use in the ensemble (naming prevents later errors)
+models <- list(rf=modelFitQ2rf, gbm=modelFitQ2gbm, lda=modelFitQ2lda)
+
+# By default caretEnsemble optimizes AUC for classification,
+# which optFun can I use to change this?
+caretEns <- caretEnsemble(models)
+```
+
+Now look at the performance results for the ensemble.
+
+```{r ensembleResults}
+summary(caretEns)
+
+testPredQ2ens <- predict(caretEns, newdata=testing)
+# To look at base model predictions all together:
+# object <- caretEns
+# preds <- multiPredict(object$models, type, newdata=testing)
+
+# Is there a cleaner way to do this?
+confusionMatrix(testPredQ2ens > 0.5, testing$diagnosis == "Control")
+```
+
+Now look at the ROC plots for the base models and ensemble.
+
+```{r ROCplots}
+require(ROCR) # ROC plots
+
+# First the base models.  This requires probabilities.
+testPredQ2rfprob <-  predict(modelFitQ2rf,  newdata=testing, type="prob")[2]
+testPredQ2gbmprob <- predict(modelFitQ2gbm, newdata=testing, type="prob")[2]
+testPredQ2ldaprob <- predict(modelFitQ2lda, newdata=testing, type="prob")[2]
+
+predrf <- prediction(predictions = testPredQ2rfprob,
+                  labels = testing$diagnosis,
+                  label.ordering = levels(testing$diagnosis))
+perfrf <- performance(predrf, "tpr", "fpr") # standard ROC curve, see demo for more
+plot(perfrf, avg= "threshold", colorize=T, lwd= 3,
+     print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7), # Add threshold values
+     main=paste("ROC curve for Random Forest"))
+
+predgbm <- prediction(predictions = testPredQ2gbmprob,
+                  labels = testing$diagnosis,
+                  label.ordering = levels(testing$diagnosis))
+perfgbm <- performance(predgbm, "tpr", "fpr") # standard ROC curve, see demo for more
+plot(perfgbm, avg= "threshold", colorize=T, lwd= 3,
+     print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7), # Add threshold values
+     main=paste("ROC curve for GBM"))
+
+predlda <- prediction(predictions = testPredQ2ldaprob,
+                  labels = testing$diagnosis,
+                  label.ordering = levels(testing$diagnosis))
+perflda <- performance(predlda, "tpr", "fpr") # standard ROC curve, see demo for more
+plot(perflda, avg= "threshold", colorize=T, lwd= 3,
+     print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7), # Add threshold values
+     main=paste("ROC curve for LDA"))
+
+predens <- prediction(predictions = testPredQ2ens,
+                  labels = testing$diagnosis,
+                  label.ordering = levels(testing$diagnosis))
+perfens <- performance(predens, "tpr", "fpr") # standard ROC curve, see demo for more
+plot(perfens, avg= "threshold", colorize=T, lwd= 3,
+     print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7), # Add threshold values
+     main=paste("ROC curve for caretEnsemble"))
+```
+
+Now create a caretStack model using rpart with the RF, GBM, and LDA base models.  See ?caretStack (including paper reference at the end) for more information.
+
+Tried rpart, glm, and rf.
+
+```{r trainStack}
+caretSt <- caretStack(models, method='rpart', metric=trainMetric,
+                      trControl=trainControl(method='cv',
+                                             classProbs = TRUE, # Needed for twoClassSummary
+                                             summaryFunction = trainSummary
+                                             ))
+```
+
+Now look at the performance results for the stack.
+
+```{r stackResults}
+summary(caretSt)
+
+# In contrast to caretEnsemble, caretStack requires "prob" to compute probabilities
+testPredQ2st <- predict(caretSt, newdata=testing)
+# To look at base model predictions all together:
+# object <- caretSt
+# preds <- multiPredict(object$models, type, newdata=testing)
+
+confusionMatrix(testPredQ2st, testing$diagnosis)
+
+# It performs much better than below would seem to indicate
+caretSt$ens_model
+
+# This tree looks very odd.  What is going on here?
+caretSt$ens_model$finalModel
+library(rattle)
+fancyRpartPlot(caretSt$ens_model$finalModel)
+
+# Take a closer look at data distribution
+table(training$diagnosis)
+table(testing$diagnosis)
+```
