@@ -18,9 +18,9 @@ I found this quiz question very frustrating.  The answers I obtained did not agr
 
 To salvage something from this experience I decided to use this as an opportunity to create an example using [caretEnsemble](https://github.com/zachmayer/caretEnsemble).  First install (from Github, if necessary) and load the package.  This installs the Dev package to get tests and also runs those tests.
 
-The source code for this file resides in https://github.com/rseiter/PracticalMLProject/CaretEnsembleExample.Rmd and the resulting HTML can be viewed at http://rseiter.github.io/PracticalMLProject/CaretEnsembleExample.html
+The source code for this file resides in [CaretEnsembleExample.Rmd](https://github.com/rseiter/PracticalMLProject/blob/master/CaretEnsembleExample.Rmd) and the resulting HTML can be viewed at http://rseiter.github.io/PracticalMLProject/CaretEnsembleExample.html
 
-```{r load, warning=FALSE, message=FALSE}
+```{r load, cache=FALSE, warning=FALSE, message=FALSE}
 library(caret)
 
 if(!require(caretEnsemble)){
@@ -30,6 +30,22 @@ if(!require(caretEnsemble)){
   install_github('zachmayer/caretEnsemble', ref = 'Dev') #Dev branch
   test_package('caretEnsemble') #Run tests
 }
+```
+
+```{r loadHide, cache=FALSE, echo=FALSE, warning=FALSE, message=FALSE}
+# Load these here to suppress messages
+library(pbapply)
+library(ROCR)
+library(rpart)
+library(rattle)
+library(rpart.plot)
+library(randomForest)
+library(e1071)
+library(gbm)
+library(MASS)
+library(RColorBrewer)
+library(Metrics)
+library(plyr)
 ```
 
 The initial setup and model training is similar to the quiz question (note that this does NOT provide an answer, the seeds are different) except for the addition of a trainControl whuch runs 10-fold CV with the same resampling indexes (required for caretEnsemble to work correctly).
@@ -72,11 +88,12 @@ modelFitQ2lda <- train(diagnosis ~ ., training, method="lda", metric=trainMetric
 
 Now look at the performance results for the base models.
 
-```{r modelResults}
+```{r modelResults, cache=FALSE}
 # Check CV results
-modelFitQ2rf
-modelFitQ2gbm
-modelFitQ2lda
+# These are too verbose with multiClassSummary
+# modelFitQ2rf
+# modelFitQ2gbm
+# modelFitQ2lda
 getTrainPerf(modelFitQ2rf)
 getTrainPerf(modelFitQ2gbm)
 getTrainPerf(modelFitQ2lda)
@@ -121,7 +138,8 @@ confusionMatrix(testPredQ2ens > 0.5, testing$diagnosis == "Control")
 
 Now look at the ROC plots for the base models and ensemble.
 
-```{r ROCplots}
+```{r ROCplots, cache=FALSE}
+# Turn caching off here since it keeps giving error
 require(ROCR) # ROC plots
 
 # First the base models.  This requires probabilities.
@@ -176,7 +194,7 @@ caretSt <- caretStack(models, method='rpart', metric=trainMetric,
 
 Now look at the performance results for the stack.
 
-```{r stackResults}
+```{r stackResults, cache=FALSE}
 summary(caretSt)
 
 # In contrast to caretEnsemble, caretStack requires "prob" to compute probabilities
@@ -187,15 +205,11 @@ testPredQ2st <- predict(caretSt, newdata=testing)
 
 confusionMatrix(testPredQ2st, testing$diagnosis)
 
-# It performs much better than below would seem to indicate
-caretSt$ens_model
+#caretSt$ens_model
+getTrainPerf(caretSt$ens_model)
+plot(caretSt$ens_model)
 
-# This tree looks very odd.  What is going on here?
 caretSt$ens_model$finalModel
 library(rattle)
 fancyRpartPlot(caretSt$ens_model$finalModel)
-
-# Take a closer look at data distribution
-table(training$diagnosis)
-table(testing$diagnosis)
 ```
